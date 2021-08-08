@@ -1,1 +1,1 @@
-Simplified library to control 12 servo motors using singe TCB timer 
+Simplified library for controlling up to 12 servo motors using singe TCB timer. 
