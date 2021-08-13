@@ -2,9 +2,10 @@
 #include <ServoManager.h>
 
 #include <avr/io.h>
+#include <avr/interrupt.h>
 
 
-#define MID_PULSE_WIDTH (MAX_PULSE_WIDTH - MIN_PULSE_WIDTH) >> 1
+#define MID_PULSE_WIDTH (MIN_PULSE_WIDTH + (MAX_PULSE_WIDTH - MIN_PULSE_WIDTH) >> 1)
 
 #define DEFAULT_SERVO(_pin) (servo_ticks) {_pin, MID_PULSE_WIDTH, PIN_DISABLED}
 #define INVALID_SERVO DEFAULT_SERVO(INVALID_SERVO_PIN)
@@ -15,30 +16,83 @@ static servo_ticks servos[MAX_SERVOS];          // array with all attached servo
 uint8_t attachedServoCount = 0;     
 
 static uint8_t ticks_order[MAX_SERVOS];         // array with order of servo pulses represented by pin number
+uint8_t* buffer_ticks_order;
 uint8_t enabledServoCount = 0;
 #define ORDER_TO_TICK(_i) pin_to_servo[ticks_order[_i]]->ticks;
+
+// bit shift by 3 represents prescaler set to 8
+#define US_TO_TICKS(_us) ((clockCyclesPerMicrosecond()*_us) >> 3)
+#define TICKS_TO_US(_tk) ((_tk<<3) / clockCyclesPerMicrosecond())
+#define TICKS_ERROR 20
+
+
+uint8_t current_order = 0;
+
+SIGNAL (TIMER1_COMPA_vect) {
+  if(enabledServoCount == 0){
+    TCNT1 = 0;
+    OCR1A = US_TO_TICKS(CYCLE_WIDTH);
+  } else if(TCNT1 >= US_TO_TICKS(CYCLE_WIDTH)) { 
+    TCNT1 = 0; 
+
+    for(int i = 0; i < enabledServoCount; i++)
+      digitalWrite( buffer_ticks_order[i], HIGH);
+
+    OCR1A = pin_to_servo[buffer_ticks_order[current_order]]->ticks;
+  } else {
+    while(current_order < enabledServoCount){
+      digitalWrite(buffer_ticks_order[current_order], LOW);
+      current_order++;
+      // if(enabledServoCount > 1){
+      //   if(pin_to_servo[buffer_ticks_order[current_order - 1]]->ticks+TICKS_ERROR > 
+      //     pin_to_servo[buffer_ticks_order[current_order]]->ticks)
+      //     ;
+      //   else
+      //     break;
+      // }
+    }
+
+    if(current_order >= enabledServoCount){
+      current_order = 0;
+      OCR1A = US_TO_TICKS(CYCLE_WIDTH);
+    } else
+      OCR1A = pin_to_servo[buffer_ticks_order[current_order]]->ticks;
+  }
+}
+
+void initTimer(){
+  TCCR1A = 0b00000000;      // normal operating mode
+  TCCR1B = 0b00000010;      // prescaler set to clk/8
+  TIFR1 |= _BV(OCF1A);      // clear any pending interrupts
+  TIMSK1 |=  _BV(OCIE1A) ;  // enable the output compare A interrupt
+  TIMSK1 |=  _BV(OCIE1A) ;  // enable the output compare A interrupt
+  TCNT1 = 0;                // clear the timer count
+}
 
 // Servo Manager functionality
 ServoManager::ServoManager(){
   // init servo array with invalid and pin_to_servo with NULLs
   int i = 0;   
-  for(i; i < MAX_SERVOS; i++){
+  for(; i < MAX_SERVOS; i++){
     servos[i] = INVALID_SERVO;
-    pin_to_servo[i] = NULL;
-  } for (i; i < MAX_PINS; i++){
+  } 
+  for (i = 0; i < MAX_PINS; i++){
     pin_to_servo[i] = NULL;
   }
+
+  initTimer();
 }
 
 // TODO: impement attach with pulse argument
 uint8_t ServoManager::attach(uint8_t pin){     
 
   // check if not limited by servo number
-  if(attachedServoCount = MAX_SERVOS)
-    return ATTACHMENT_FAILED;
+  if(attachedServoCount == MAX_SERVOS)
+    return ATTACHMENT_SERVO_LIMIT;
+
   // check if pin is open
   if(pin_to_servo[pin] != NULL)
-    return ATTACHMENT_FAILED;
+    return ATTACHMENT_PIN_POPULATED;
   
   // looking for empty spot in servo array
   for(int i = 0; i < MAX_SERVOS; i++){
@@ -54,8 +108,8 @@ uint8_t ServoManager::attach(uint8_t pin){
 }
 
 uint8_t ServoManager::detach(uint8_t pin){
-  if(pinAttached){
-    if(pinEnabled)
+  if(pinAttached(pin) == SERVO_FOUND){
+    if(pinEnabled(pin) == PIN_ENABLED)
       disable(pin);
     *(pin_to_servo[pin]) = INVALID_SERVO;
     pin_to_servo[pin] = NULL;
@@ -83,13 +137,16 @@ uint8_t ServoManager::enable(uint8_t pin){
   }
 
   ticks_order[i + 1] = pin;
-  pin_to_servo[pin]->enabled = PIN_ENABLED;  
+  pin_to_servo[pin]->enabled = PIN_ENABLED; 
+
+  enabledServoCount += 1; 
+  buffer_ticks_order = ticks_order;
   return SERVO_FOUND;
 }
 
 // TODO: implement buffering
 uint8_t ServoManager::write(uint8_t pin, uint16_t ticks){
-  if(!pinAttached)
+  if(pinAttached(pin) == SERVO_NOT_FOUND)
     return SERVO_NOT_FOUND;
 
   // writing servo ticks to servo array
@@ -101,26 +158,37 @@ uint8_t ServoManager::write(uint8_t pin, uint16_t ticks){
   else 
     ticks_to_write = ticks;
   
+  ticks_to_write = US_TO_TICKS(ticks_to_write);
   uint16_t prev_ticks = pin_to_servo[pin]->ticks;
   pin_to_servo[pin]->ticks = ticks_to_write;
 
-  if(pinEnabled(pin))      // adjusting position in servos order if servo is enabled
+  Serial.print(ticks_order[0]);
+  Serial.print('>');
+  Serial.println(ticks_order[1]);
+
+  if(pinEnabled(pin) == PIN_ENABLED){      // adjusting position in servos order if servo is enabled
     if(prev_ticks < ticks_to_write){
       int i = 0;
-      for(i; pin_to_servo[ticks_order[i]]->ticks <= prev_ticks; i++)            // looking for previous ticks value
+      for(; pin_to_servo[ticks_order[i]]->ticks <= prev_ticks && i < enabledServoCount; i++)            // looking for previous ticks value
         ;
-      for(i--; pin_to_servo[ticks_order[i]]->ticks <= ticks_to_write; i++)   // shifting positions to the left 
-        ticks_order[i] = ticks_order[i + 1];
-      ticks_order[i] = ticks_to_write;
+      for(; pin_to_servo[ticks_order[i]]->ticks < ticks_to_write && i < enabledServoCount; i++)   // shifting positions to the left 
+        ticks_order[i - 1] = ticks_order[i];
+      ticks_order[i - 1] = pin;
     } else if(prev_ticks > ticks_to_write){
       int i = enabledServoCount - 1;
-      for(i; pin_to_servo[ticks_order[i]]->ticks <= prev_ticks; i--)
+      for(; pin_to_servo[ticks_order[i]]->ticks >= prev_ticks && i >= 0; i--)
         ;
-      for(i++; pin_to_servo[ticks_order[i]]->ticks <= ticks_to_write; i--)
-        ticks_order[i] = ticks_order[i - 1];  
-      ticks_order[i] = ticks_to_write;
+      for(; pin_to_servo[ticks_order[i]]->ticks > ticks_to_write && i >= 0; i--)
+        ticks_order[i + 1] = ticks_order[i];  
+      ticks_order[i + 1] = pin;
     }
+  }
 
+  Serial.print(ticks_order[0]);
+  Serial.print('>');
+  Serial.println(ticks_order[1]);
+
+  buffer_ticks_order = ticks_order;
   return SERVO_FOUND;
 }
 
@@ -138,10 +206,12 @@ uint8_t ServoManager::disable(uint8_t pin){
       break;
 
   // shifting rest of servos to the right
-  for(i; i < enabledServoCount - 1; i++)
-    ticks_order[i] == ticks_order[i + 1];
+  for(; i < enabledServoCount - 1; i++)
+    ticks_order[i] = ticks_order[i + 1];
 
   pin_to_servo[pin]->enabled = PIN_DISABLED;  
+
+  buffer_ticks_order = ticks_order;
   return SERVO_FOUND;
 }
 
