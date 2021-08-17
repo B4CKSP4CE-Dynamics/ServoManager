@@ -5,7 +5,7 @@
 #include <avr/interrupt.h>
 
 
-#define MID_PULSE_WIDTH (MIN_PULSE_WIDTH + (MAX_PULSE_WIDTH - MIN_PULSE_WIDTH) >> 1)
+#define MID_PULSE_WIDTH (MIN_PULSE_WIDTH + ((MAX_PULSE_WIDTH - MIN_PULSE_WIDTH) >> 1))
 
 #define DEFAULT_SERVO(_pin) (servo_ticks) {_pin, MID_PULSE_WIDTH, PIN_DISABLED}
 #define INVALID_SERVO DEFAULT_SERVO(INVALID_SERVO_PIN)
@@ -75,7 +75,9 @@ ServoManager::ServoManager(){
   int i = 0;   
   for(; i < MAX_SERVOS; i++){
     servos[i] = INVALID_SERVO;
+    ticks_order[i] = INVALID_SERVO_PIN;
   } 
+
   for (i = 0; i < MAX_PINS; i++){
     pin_to_servo[i] = NULL;
   }
@@ -233,3 +235,23 @@ uint8_t ServoManager::pinEnabled(uint8_t pin){
     return pin_to_servo[pin]->enabled;
   return PIN_DISABLED;
 }
+
+
+uint8_t ServoManager::printServoOrder(){
+  String line = "";
+  for(int i = 0; i < enabledServoCount; i++){
+    line += String(ticks_order[i]);
+    if (i < enabledServoCount-1)
+      line += '-';
+  }
+  line += ';';
+
+  Serial.println(line);
+  return getServoCount();
+}
+
+uint8_t ServoManager::printServoOrder(String tag){
+  Serial.print(tag + ": ");
+  return printServoOrder();
+}
+

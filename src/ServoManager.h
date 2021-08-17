@@ -1,5 +1,4 @@
-#ifndef Servo_h
-#define Servo_h
+#ifndef ServoManager_h
 
 #include <inttypes.h>
 
