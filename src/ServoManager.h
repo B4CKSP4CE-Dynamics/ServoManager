@@ -45,6 +45,7 @@ public:
   // debug functions - not expected in release 
   uint8_t printServoOrder();
   uint8_t printServoOrder(String tag);
+  uint8_t getEnabledServoCount();
 };
 
 #endif

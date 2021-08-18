@@ -59,12 +59,11 @@ uint8_t enabledServoCount = 0;
 // bit shift by 3 represents prescaler set to 8
 #define US_TO_TICKS(_us) ((clockCyclesPerMicrosecond()*_us) >> 3)
 #define TICKS_TO_US(_tk) ((_tk<<3) / clockCyclesPerMicrosecond())
-#define TICKS_ERROR 20
+#define TICKS_ERROR 24
 
 uint8_t current_order = 0;
 
 SIGNAL (TIMER1_COMPA_vect) {
-  Serial.println(String(TCNT1) + ": on pin #" + String(ticks_order[current_order]));
   if(enabledServoCount == 0){
     TCNT1 = 0;
     OCR1A = US_TO_TICKS(CYCLE_WIDTH);
@@ -79,20 +78,17 @@ SIGNAL (TIMER1_COMPA_vect) {
     while(current_order < enabledServoCount){
       digitalWrite(buffer_ticks_order[current_order], LOW);
       current_order++;
-      // if(enabledServoCount > 1){
-      //   if(pin_to_servo[buffer_ticks_order[current_order - 1]]->ticks+TICKS_ERROR > 
-      //     pin_to_servo[buffer_ticks_order[current_order]]->ticks)
-      //     ;
-      //   else
-      //     break;
-      // }
-    }
 
-    if(current_order >= enabledServoCount){
-      current_order = 0;
-      OCR1A = US_TO_TICKS(CYCLE_WIDTH);
-    } else
-      OCR1A = pin_to_servo[buffer_ticks_order[current_order]]->ticks;
+      if(current_order >= enabledServoCount){
+        current_order = 0;
+        OCR1A = US_TO_TICKS(CYCLE_WIDTH);
+        break;
+      } else {
+        OCR1A = pin_to_servo[buffer_ticks_order[current_order]]->ticks;
+        if(pin_to_servo[buffer_ticks_order[current_order - 1]]->ticks < OCR1A+TICKS_ERROR)
+          break;
+      }
+    }
   }
 }
 
@@ -188,11 +184,11 @@ uint8_t ServoManager::write(uint8_t pin, uint16_t ticks){
 
   // writing servo ticks to servo array
   uint16_t ticks_to_write;
-  // if(ticks > MAX_PULSE_WIDTH)
-  //   ticks_to_write = MAX_PULSE_WIDTH;
-  // else if(ticks < MIN_PULSE_WIDTH)
-  //   ticks_to_write = MIN_PULSE_WIDTH;
-  // else 
+  if(ticks > MAX_PULSE_WIDTH)
+    ticks_to_write = MAX_PULSE_WIDTH;
+  else if(ticks < MIN_PULSE_WIDTH)
+    ticks_to_write = MIN_PULSE_WIDTH;
+  else 
     ticks_to_write = ticks;
   
   ticks_to_write = US_TO_TICKS(ticks_to_write);
@@ -319,4 +315,8 @@ uint8_t ServoManager::printServoOrder(){
 uint8_t ServoManager::printServoOrder(String tag){
   Serial.print(tag + ": ");
   return printServoOrder();
+}
+
+uint8_t ServoManager::getEnabledServoCount(){
+  return enabledServoCount;
 }
