@@ -1,8 +1,10 @@
 #ifndef ServoManager_h
+  #define ServoManager_h
+
 
 #include <inttypes.h>
 
-
+// in microseconds
 #define MIN_PULSE_WIDTH   550
 #define MAX_PULSE_WIDTH  2550
 #define CYCLE_WIDTH     20000
@@ -22,12 +24,6 @@
 #define PIN_ENABLED 1
 
 
-typedef struct {
-  uint8_t pin;                // number of pin servo is attached to
-  volatile uint16_t ticks;    // pulse width in ticks
-  uint8_t enabled;            // status of servo 
-} servo_ticks;
-
 class ServoManager{
 public:
 
@@ -45,6 +41,10 @@ public:
   uint8_t getServoCount();                        // returns number of servos attached 
   uint8_t pinAttached(uint8_t pin);               // returns whether there is servo attached or not to pin
   uint8_t pinEnabled(uint8_t pin);                // returns whether servo on this pin is enabled or not
+
+  // debug functions - not expected in release 
+  uint8_t printServoOrder();
+  uint8_t printServoOrder(String tag);
 };
 
 #endif

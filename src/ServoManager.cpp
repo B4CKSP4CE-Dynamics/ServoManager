@@ -1,22 +1,58 @@
 #include <Arduino.h>
+
 #include <ServoManager.h>
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
 
+typedef struct {
+  uint8_t pin;                // number of pin servo is attached to
+  volatile uint16_t ticks;    // pulse width in ticks
+  uint8_t enabled;            // status of servo 
+} servo_data;
+
+bool operator> (const servo_data &servo1, const servo_data &servo2){
+  if(servo1.ticks > servo2.ticks)
+    return true;
+  if(servo1.ticks == servo2.ticks && servo1.pin > servo2.pin)
+    return true;
+  return false;
+}
+
+bool operator>= (const servo_data &servo1, const servo_data &servo2){
+  if(servo1.ticks > servo2.ticks)
+    return true;
+  if(servo1.ticks == servo2.ticks && servo1.pin >= servo2.pin)
+    return true;
+  return false;
+}
+
+bool operator< (const servo_data &servo1, const servo_data &servo2) {
+  return servo2 >= servo1;
+}
+
+bool operator<= (const servo_data &servo1, const servo_data &servo2) {
+  return servo2 > servo1;
+}
+
+bool operator== (const servo_data &servo1, const servo_data &servo2) {
+  if(servo1.ticks != servo2.ticks) return false;
+  if(servo1.pin != servo2.pin) return false;
+  return true;
+}
+
 
 #define MID_PULSE_WIDTH (MIN_PULSE_WIDTH + ((MAX_PULSE_WIDTH - MIN_PULSE_WIDTH) >> 1))
 
-#define DEFAULT_SERVO(_pin) (servo_ticks) {_pin, MID_PULSE_WIDTH, PIN_DISABLED}
+#define DEFAULT_SERVO(_pin) (servo_data) {_pin, MID_PULSE_WIDTH, PIN_DISABLED}
 #define INVALID_SERVO DEFAULT_SERVO(INVALID_SERVO_PIN)
+static servo_data* pin_to_servo[MAX_PINS];     // array pointing to servos for quick access via pin number
 
-static servo_ticks* pin_to_servo[MAX_PINS];     // array pointing to servos for quick access via pin number
-
-static servo_ticks servos[MAX_SERVOS];          // array with all attached servos
+static servo_data servos[MAX_SERVOS];          // array with all attached servos
 uint8_t attachedServoCount = 0;     
 
 static uint8_t ticks_order[MAX_SERVOS];         // array with order of servo pulses represented by pin number
-uint8_t* buffer_ticks_order;
+uint8_t* buffer_ticks_order;                    // TODO: rework buffering
 uint8_t enabledServoCount = 0;
 #define ORDER_TO_TICK(_i) pin_to_servo[ticks_order[_i]]->ticks;
 
@@ -25,10 +61,10 @@ uint8_t enabledServoCount = 0;
 #define TICKS_TO_US(_tk) ((_tk<<3) / clockCyclesPerMicrosecond())
 #define TICKS_ERROR 20
 
-
 uint8_t current_order = 0;
 
 SIGNAL (TIMER1_COMPA_vect) {
+  Serial.println(String(TCNT1) + ": on pin #" + String(ticks_order[current_order]));
   if(enabledServoCount == 0){
     TCNT1 = 0;
     OCR1A = US_TO_TICKS(CYCLE_WIDTH);
@@ -128,10 +164,10 @@ uint8_t ServoManager::enable(uint8_t pin){
     return SERVO_FOUND;
 
   
-  // shifting all servos with greater ticks vlue to the left
+  // shifting all servos with greater ticks value to the left
   int i;
   for(i = enabledServoCount - 1; i >= 0; i--){
-    if(pin_to_servo[ticks_order[i]]->ticks > pin_to_servo[pin]->ticks)      // TODO: potential optimization
+    if(*pin_to_servo[ticks_order[i]] > *pin_to_servo[pin])      // TODO: potential optimization
       ticks_order[i + 1] = ticks_order[i];
     else
       // if found servo with identical or lower ticks value, breaking and inserting here
@@ -146,49 +182,66 @@ uint8_t ServoManager::enable(uint8_t pin){
   return SERVO_FOUND;
 }
 
-// TODO: implement buffering
 uint8_t ServoManager::write(uint8_t pin, uint16_t ticks){
   if(pinAttached(pin) == SERVO_NOT_FOUND)
     return SERVO_NOT_FOUND;
 
   // writing servo ticks to servo array
   uint16_t ticks_to_write;
-  if(ticks > MAX_PULSE_WIDTH)
-    ticks_to_write = MAX_PULSE_WIDTH;
-  else if(ticks < MIN_PULSE_WIDTH)
-    ticks_to_write = MIN_PULSE_WIDTH;
-  else 
+  // if(ticks > MAX_PULSE_WIDTH)
+  //   ticks_to_write = MAX_PULSE_WIDTH;
+  // else if(ticks < MIN_PULSE_WIDTH)
+  //   ticks_to_write = MIN_PULSE_WIDTH;
+  // else 
     ticks_to_write = ticks;
   
   ticks_to_write = US_TO_TICKS(ticks_to_write);
-  uint16_t prev_ticks = pin_to_servo[pin]->ticks;
-  pin_to_servo[pin]->ticks = ticks_to_write;
-
-  Serial.print(ticks_order[0]);
-  Serial.print('>');
-  Serial.println(ticks_order[1]);
+  servo_data old_servo_data = *pin_to_servo[pin];
+  servo_data new_servo_data = *pin_to_servo[pin];
+  new_servo_data.ticks = ticks_to_write;
 
   if(pinEnabled(pin) == PIN_ENABLED){      // adjusting position in servos order if servo is enabled
-    if(prev_ticks < ticks_to_write){
+    if(old_servo_data.ticks < ticks_to_write){
       int i = 0;
-      for(; pin_to_servo[ticks_order[i]]->ticks <= prev_ticks && i < enabledServoCount; i++)            // looking for previous ticks value
-        ;
-      for(; pin_to_servo[ticks_order[i]]->ticks < ticks_to_write && i < enabledServoCount; i++)   // shifting positions to the left 
+
+      // skipping until we find previous value
+      for(; i < enabledServoCount; i++)
+        if(*pin_to_servo[ticks_order[i]] == old_servo_data){
+          i++;
+          break;
+        }
+      // shifting every value to the left until we find new value
+      for(; i < enabledServoCount; i++){
         ticks_order[i - 1] = ticks_order[i];
+        if(*pin_to_servo[ticks_order[i]] < new_servo_data){
+          i++;
+          break;
+        }
+      }
+      // placing pin number in order
       ticks_order[i - 1] = pin;
-    } else if(prev_ticks > ticks_to_write){
+    } else if(old_servo_data.ticks > ticks_to_write){
+      // same, but reversed
       int i = enabledServoCount - 1;
-      for(; pin_to_servo[ticks_order[i]]->ticks >= prev_ticks && i >= 0; i--)
-        ;
-      for(; pin_to_servo[ticks_order[i]]->ticks > ticks_to_write && i >= 0; i--)
+
+      for(; i >= 0; i--)
+        if(*pin_to_servo[ticks_order[i]] == old_servo_data){
+          i--;
+          break;
+        }
+      for(; i >= 0; i--){
         ticks_order[i + 1] = ticks_order[i];  
+        if(*pin_to_servo[ticks_order[i]] > new_servo_data){
+          i--;
+          break;
+        }
+      }
       ticks_order[i + 1] = pin;
-    }
+    } else 
+      return SERVO_FOUND;
   }
 
-  Serial.print(ticks_order[0]);
-  Serial.print('>');
-  Serial.println(ticks_order[1]);
+  pin_to_servo[pin]->ticks = ticks_to_write;
 
   buffer_ticks_order = ticks_order;
   return SERVO_FOUND;
@@ -211,8 +264,13 @@ uint8_t ServoManager::disable(uint8_t pin){
   for(; i < enabledServoCount - 1; i++)
     ticks_order[i] = ticks_order[i + 1];
 
+  // plugging left over
+  ticks_order[i] = INVALID_SERVO_PIN;
+
+
   pin_to_servo[pin]->enabled = PIN_DISABLED;  
 
+  enabledServoCount--;
   buffer_ticks_order = ticks_order;
   return SERVO_FOUND;
 }
@@ -244,7 +302,15 @@ uint8_t ServoManager::printServoOrder(){
     if (i < enabledServoCount-1)
       line += '-';
   }
-  line += ';';
+
+  line += '(';
+  for(int i = 0; i < enabledServoCount; i++){
+    line += String(TICKS_TO_US(pin_to_servo[ticks_order[i]]->ticks));
+    if (i < enabledServoCount-1)
+      line += " < ";
+  }
+
+  line += ");";
 
   Serial.println(line);
   return getServoCount();
@@ -254,4 +320,3 @@ uint8_t ServoManager::printServoOrder(String tag){
   Serial.print(tag + ": ");
   return printServoOrder();
 }
-
