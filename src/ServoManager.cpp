@@ -289,34 +289,3 @@ uint8_t ServoManager::pinEnabled(uint8_t pin){
     return pin_to_servo[pin]->enabled;
   return PIN_DISABLED;
 }
-
-
-uint8_t ServoManager::printServoOrder(){
-  String line = "";
-  for(int i = 0; i < enabledServoCount; i++){
-    line += String(ticks_order[i]);
-    if (i < enabledServoCount-1)
-      line += '-';
-  }
-
-  line += '(';
-  for(int i = 0; i < enabledServoCount; i++){
-    line += String(TICKS_TO_US(pin_to_servo[ticks_order[i]]->ticks));
-    if (i < enabledServoCount-1)
-      line += " < ";
-  }
-
-  line += ");";
-
-  Serial.println(line);
-  return getServoCount();
-}
-
-uint8_t ServoManager::printServoOrder(String tag){
-  Serial.print(tag + ": ");
-  return printServoOrder();
-}
-
-uint8_t ServoManager::getEnabledServoCount(){
-  return enabledServoCount;
-}

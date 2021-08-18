@@ -41,11 +41,6 @@ public:
   uint8_t getServoCount();                        // returns number of servos attached 
   uint8_t pinAttached(uint8_t pin);               // returns whether there is servo attached or not to pin
   uint8_t pinEnabled(uint8_t pin);                // returns whether servo on this pin is enabled or not
-
-  // debug functions - not expected in release 
-  uint8_t printServoOrder();
-  uint8_t printServoOrder(String tag);
-  uint8_t getEnabledServoCount();
 };
 
 #endif
