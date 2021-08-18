@@ -5,10 +5,19 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 
+// bit shift by 3 represents prescaler set to 8
+#define US_TO_TICKS(_us) ((uint16_t)((clockCyclesPerMicrosecond()*_us) >> 3))
+#define TICKS_TO_US(_tk) ((_tk<<3) / clockCyclesPerMicrosecond())
+#define TICKS_ERROR 24
+#define MID_PULSE_WIDTH US_TO_TICKS(MIN_PULSE_WIDTH + ((MAX_PULSE_WIDTH - MIN_PULSE_WIDTH) >> 1))
+
 typedef struct {
-  uint8_t pin;                // number of pin servo is attached to
-  volatile uint16_t ticks;    // pulse width in ticks
-  uint8_t enabled;            // status of servo 
+  uint8_t pin;                    // number of pin servo is attached to
+  uint8_t enabled;                // status of servo 
+
+  volatile uint16_t ticks;        // pulse width in ticks
+  volatile uint16_t min_ticks;    // min pulse width in ticks
+  volatile uint16_t max_ticks;    // max pulse width in ticks
 } servo_data;
 
 bool operator> (const servo_data &servo1, const servo_data &servo2){
@@ -28,23 +37,21 @@ bool operator>= (const servo_data &servo1, const servo_data &servo2){
 }
 
 bool operator< (const servo_data &servo1, const servo_data &servo2) {
-  return servo2 >= servo1;
-}
-
-bool operator<= (const servo_data &servo1, const servo_data &servo2) {
   return servo2 > servo1;
 }
 
+bool operator<= (const servo_data &servo1, const servo_data &servo2) {
+  return servo2 >= servo1;
+}
+
 bool operator== (const servo_data &servo1, const servo_data &servo2) {
-  if(servo1.ticks != servo2.ticks) return false;
   if(servo1.pin != servo2.pin) return false;
+  if(servo1.ticks != servo2.ticks) return false;
   return true;
 }
 
-
-#define MID_PULSE_WIDTH (MIN_PULSE_WIDTH + ((MAX_PULSE_WIDTH - MIN_PULSE_WIDTH) >> 1))
-
-#define DEFAULT_SERVO(_pin) (servo_data) {_pin, MID_PULSE_WIDTH, PIN_DISABLED}
+#define NEW_SERVO(_pin, _min_ticks, _max_ticks) (servo_data) {_pin, PIN_DISABLED, MID_PULSE_WIDTH, _min_ticks, _max_ticks}
+#define DEFAULT_SERVO(_pin) NEW_SERVO(_pin, US_TO_TICKS(MIN_PULSE_WIDTH), US_TO_TICKS(MAX_PULSE_WIDTH))
 #define INVALID_SERVO DEFAULT_SERVO(INVALID_SERVO_PIN)
 static servo_data* pin_to_servo[PINS_NUMBER];     // array pointing to servos for quick access via pin number
 
@@ -59,11 +66,6 @@ uint8_t enabledServoCount = 0;
 uint8_t current_order = 0;
 uint8_t buffer_ticks_order[MAX_SERVOS];
 uint8_t buffer_update = false;
-
-// bit shift by 3 represents prescaler set to 8
-#define US_TO_TICKS(_us) ((clockCyclesPerMicrosecond()*_us) >> 3)
-#define TICKS_TO_US(_tk) ((_tk<<3) / clockCyclesPerMicrosecond())
-#define TICKS_ERROR 24
 
 SIGNAL (TIMER1_COMPA_vect) {
   if(enabledServoCount == 0){
@@ -149,6 +151,37 @@ uint8_t ServoManager::attach(uint8_t pin){
   return ATTACHMENT_SUCCEED;
 }
 
+uint8_t ServoManager::attach(uint8_t pin, uint16_t min_pulse_width, uint16_t max_pulse_width){    
+
+  // check if not limited by servo number
+  if(attachedServoCount == MAX_SERVOS)
+    return ATTACHMENT_SERVO_LIMIT;
+
+  // check if pin is open
+  if(pin_to_servo[pin] != nullptr)
+    return ATTACHMENT_PIN_POPULATED;
+
+  if(min_pulse_width >= max_pulse_width)
+    return ATTACHMENT_INVALID_MIN_MAX;
+  if(min_pulse_width <= 0 || max_pulse_width <= 0)
+    return ATTACHMENT_INVALID_MIN_MAX;
+  if(max_pulse_width + TICKS_TO_US(TICKS_ERROR) > CYCLE_WIDTH)
+    max_pulse_width = CYCLE_WIDTH - TICKS_TO_US(TICKS_ERROR);
+  
+  // looking for empty spot in servo array
+  for(int i = 0; i < MAX_SERVOS; i++){
+    if(servos[i].pin == INVALID_SERVO_PIN){
+      servos[i] = NEW_SERVO(pin, US_TO_TICKS(min_pulse_width), US_TO_TICKS(max_pulse_width));
+      pin_to_servo[pin] = servos + i;
+      break;
+    }
+  }
+
+  attachedServoCount++;
+  return ATTACHMENT_SUCCEED;
+
+}
+
 uint8_t ServoManager::detach(uint8_t pin){
   if(pinAttached(pin) == SERVO_FOUND){
     if(pinEnabled(pin) == PIN_ENABLED)
@@ -188,20 +221,17 @@ uint8_t ServoManager::enable(uint8_t pin){
   return SERVO_FOUND;
 }
 
-uint8_t ServoManager::write(uint8_t pin, uint16_t ticks){
+uint8_t ServoManager::write(uint8_t pin, uint16_t pulse_us){
   if(pinAttached(pin) == SERVO_NOT_FOUND)
     return SERVO_NOT_FOUND;
 
   // writing servo ticks to servo array
-  uint16_t ticks_to_write;
-  if(ticks > MAX_PULSE_WIDTH)
-    ticks_to_write = MAX_PULSE_WIDTH;
-  else if(ticks < MIN_PULSE_WIDTH)
-    ticks_to_write = MIN_PULSE_WIDTH;
-  else 
-    ticks_to_write = ticks;
+  uint16_t ticks_to_write = US_TO_TICKS(pulse_us);
+  if(pulse_us > pin_to_servo[pin]->max_ticks)
+    ticks_to_write = pin_to_servo[pin]->max_ticks;
+  if(pulse_us < pin_to_servo[pin]->min_ticks)
+    ticks_to_write = pin_to_servo[pin]->min_ticks;
   
-  ticks_to_write = US_TO_TICKS(ticks_to_write);
   servo_data old_servo_data = *pin_to_servo[pin];
   servo_data new_servo_data = *pin_to_servo[pin];
   new_servo_data.ticks = ticks_to_write;
@@ -251,6 +281,11 @@ uint8_t ServoManager::write(uint8_t pin, uint16_t ticks){
 
   buffer_update = true;
   return SERVO_FOUND;
+}
+
+uint8_t ServoManager::write_angle(uint8_t pin, uint8_t angle){
+  uint16_t pulse_us = map(angle, 0, 180, TICKS_TO_US(pin_to_servo[pin]->min_ticks), TICKS_TO_US(pin_to_servo[pin]->max_ticks));
+  return write(pin, pulse_us);
 }
 
 uint8_t ServoManager::disable(uint8_t pin){
