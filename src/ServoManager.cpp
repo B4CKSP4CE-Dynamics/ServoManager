@@ -46,47 +46,56 @@ bool operator== (const servo_data &servo1, const servo_data &servo2) {
 
 #define DEFAULT_SERVO(_pin) (servo_data) {_pin, MID_PULSE_WIDTH, PIN_DISABLED}
 #define INVALID_SERVO DEFAULT_SERVO(INVALID_SERVO_PIN)
-static servo_data* pin_to_servo[MAX_PINS];     // array pointing to servos for quick access via pin number
+static servo_data* pin_to_servo[PINS_NUMBER];     // array pointing to servos for quick access via pin number
 
 static servo_data servos[MAX_SERVOS];          // array with all attached servos
 uint8_t attachedServoCount = 0;     
 
 static uint8_t ticks_order[MAX_SERVOS];         // array with order of servo pulses represented by pin number
-uint8_t* buffer_ticks_order;                    // TODO: rework buffering
 uint8_t enabledServoCount = 0;
 #define ORDER_TO_TICK(_i) pin_to_servo[ticks_order[_i]]->ticks;
+
+
+uint8_t current_order = 0;
+uint8_t buffer_ticks_order[MAX_SERVOS];
+uint8_t buffer_update = false;
 
 // bit shift by 3 represents prescaler set to 8
 #define US_TO_TICKS(_us) ((clockCyclesPerMicrosecond()*_us) >> 3)
 #define TICKS_TO_US(_tk) ((_tk<<3) / clockCyclesPerMicrosecond())
 #define TICKS_ERROR 24
 
-uint8_t current_order = 0;
-
 SIGNAL (TIMER1_COMPA_vect) {
   if(enabledServoCount == 0){
     TCNT1 = 0;
     OCR1A = US_TO_TICKS(CYCLE_WIDTH);
-  } else if(TCNT1 >= US_TO_TICKS(CYCLE_WIDTH)) { 
-    TCNT1 = 0; 
-
-    for(int i = 0; i < enabledServoCount; i++)
-      digitalWrite( buffer_ticks_order[i], HIGH);
-
-    OCR1A = pin_to_servo[buffer_ticks_order[current_order]]->ticks;
   } else {
-    while(current_order < enabledServoCount){
-      digitalWrite(buffer_ticks_order[current_order], LOW);
-      current_order++;
+    if(TCNT1 >= US_TO_TICKS(CYCLE_WIDTH)) { 
+      TCNT1 = 0; 
 
-      if(current_order >= enabledServoCount){
-        current_order = 0;
-        OCR1A = US_TO_TICKS(CYCLE_WIDTH);
-        break;
-      } else {
-        OCR1A = pin_to_servo[buffer_ticks_order[current_order]]->ticks;
-        if(pin_to_servo[buffer_ticks_order[current_order - 1]]->ticks < OCR1A+TICKS_ERROR)
+      for(int i = 0; i < enabledServoCount; i++)
+        digitalWrite( buffer_ticks_order[i], HIGH);
+
+      if(buffer_update)
+        for(int i = 0; i < MAX_SERVOS; i++)
+          buffer_ticks_order[i] = ticks_order[i];
+      buffer_update = false;
+
+      OCR1A = pin_to_servo[buffer_ticks_order[current_order]]->ticks;
+    } else {
+      while(current_order < enabledServoCount){
+        digitalWrite(buffer_ticks_order[current_order], LOW);
+        current_order++;
+
+        if(current_order >= enabledServoCount){
+          current_order = 0;
+          OCR1A = US_TO_TICKS(CYCLE_WIDTH);
           break;
+        } else {
+          OCR1A = pin_to_servo[buffer_ticks_order[current_order]]->ticks;
+          if(pin_to_servo[buffer_ticks_order[current_order - 1]]->ticks < OCR1A+TICKS_ERROR)
+            break;
+        }
       }
     }
   }
@@ -110,14 +119,13 @@ ServoManager::ServoManager(){
     ticks_order[i] = INVALID_SERVO_PIN;
   } 
 
-  for (i = 0; i < MAX_PINS; i++){
-    pin_to_servo[i] = NULL;
+  for (i = 0; i < PINS_NUMBER; i++){
+    pin_to_servo[i] = nullptr;
   }
 
   initTimer();
 }
 
-// TODO: impement attach with pulse argument
 uint8_t ServoManager::attach(uint8_t pin){     
 
   // check if not limited by servo number
@@ -125,7 +133,7 @@ uint8_t ServoManager::attach(uint8_t pin){
     return ATTACHMENT_SERVO_LIMIT;
 
   // check if pin is open
-  if(pin_to_servo[pin] != NULL)
+  if(pin_to_servo[pin] != nullptr)
     return ATTACHMENT_PIN_POPULATED;
   
   // looking for empty spot in servo array
@@ -146,9 +154,11 @@ uint8_t ServoManager::detach(uint8_t pin){
     if(pinEnabled(pin) == PIN_ENABLED)
       disable(pin);
     *(pin_to_servo[pin]) = INVALID_SERVO;
-    pin_to_servo[pin] = NULL;
+    pin_to_servo[pin] = nullptr;
+
+    buffer_update = true;
     return SERVO_FOUND;
-  }else 
+  } else 
     return SERVO_NOT_FOUND;
 }
 
@@ -163,7 +173,7 @@ uint8_t ServoManager::enable(uint8_t pin){
   // shifting all servos with greater ticks value to the left
   int i;
   for(i = enabledServoCount - 1; i >= 0; i--){
-    if(*pin_to_servo[ticks_order[i]] > *pin_to_servo[pin])      // TODO: potential optimization
+    if(*pin_to_servo[ticks_order[i]] > *pin_to_servo[pin]) 
       ticks_order[i + 1] = ticks_order[i];
     else
       // if found servo with identical or lower ticks value, breaking and inserting here
@@ -174,7 +184,7 @@ uint8_t ServoManager::enable(uint8_t pin){
   pin_to_servo[pin]->enabled = PIN_ENABLED; 
 
   enabledServoCount += 1; 
-  buffer_ticks_order = ticks_order;
+  buffer_update = true;
   return SERVO_FOUND;
 }
 
@@ -239,7 +249,7 @@ uint8_t ServoManager::write(uint8_t pin, uint16_t ticks){
 
   pin_to_servo[pin]->ticks = ticks_to_write;
 
-  buffer_ticks_order = ticks_order;
+  buffer_update = true;
   return SERVO_FOUND;
 }
 
@@ -267,7 +277,7 @@ uint8_t ServoManager::disable(uint8_t pin){
   pin_to_servo[pin]->enabled = PIN_DISABLED;  
 
   enabledServoCount--;
-  buffer_ticks_order = ticks_order;
+  buffer_update = true;
   return SERVO_FOUND;
 }
 
@@ -277,9 +287,9 @@ uint8_t ServoManager::getServoCount(){
 }
 
 uint8_t ServoManager::pinAttached(uint8_t pin){
-  if(pin >= MAX_PINS)
+  if(pin >= PINS_NUMBER)
     return SERVO_NOT_FOUND;
-  if(pin_to_servo[pin] == NULL)
+  if(pin_to_servo[pin] == nullptr)
     return SERVO_NOT_FOUND;
   return SERVO_FOUND;
 }

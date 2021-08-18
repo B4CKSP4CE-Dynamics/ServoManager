@@ -10,7 +10,7 @@
 #define CYCLE_WIDTH     20000
 
 #define MAX_SERVOS 12
-#define MAX_PINS 14
+#define PINS_NUMBER 14
 #define INVALID_SERVO_PIN 0xFF
 
 #define ATTACHMENT_SERVO_LIMIT 0
@@ -29,7 +29,7 @@ public:
 
   // slow functions - executed when setting up
   ServoManager();
-  uint8_t attach(uint8_t pin);                    // attach the given pin to the next free channel, sets pinMode
+  uint8_t attach(uint8_t pin);                    // attach servo to the given pin 
   uint8_t detach(uint8_t pin);                    // detach servo from its pin, making channel free for new servos
 
   // fast functions - executed in code
