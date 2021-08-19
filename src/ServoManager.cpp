@@ -331,6 +331,6 @@ uint8_t ServoManager::pinAttached(uint8_t pin){
 
 uint8_t ServoManager::pinEnabled(uint8_t pin){
   if(pinAttached(pin))
-    return pin_to_servo[pin]->enabled;
+    return TICKS_TO_US(pin_to_servo[pin]->ticks);
   return PIN_DISABLED;
 }
