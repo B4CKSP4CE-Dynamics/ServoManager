@@ -137,7 +137,7 @@ uint8_t ServoManager::attach(uint8_t pin){
   // check if pin is open
   if(pin_to_servo[pin] != nullptr)
     return ATTACHMENT_PIN_POPULATED;
-  
+
   // looking for empty spot in servo array
   for(int i = 0; i < MAX_SERVOS; i++){
     if(servos[i].pin == INVALID_SERVO_PIN){
@@ -201,6 +201,8 @@ uint8_t ServoManager::enable(uint8_t pin){
     return SERVO_NOT_FOUND;
   if(pinEnabled(pin))
     return SERVO_FOUND;
+
+  pinMode(pin, OUTPUT);
 
   
   // shifting all servos with greater ticks value to the left
@@ -308,7 +310,7 @@ uint8_t ServoManager::disable(uint8_t pin){
   // plugging left over
   ticks_order[i] = INVALID_SERVO_PIN;
 
-
+  digitalWrite(pin, LOW);
   pin_to_servo[pin]->enabled = PIN_DISABLED;  
 
   enabledServoCount--;
